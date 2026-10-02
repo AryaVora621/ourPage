@@ -1,15 +1,15 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import type { Backend, Data, Person } from "@/lib/types";
 import { localBackend } from "@/lib/localBackend";
 import { makeSupabaseBackend } from "@/lib/supabaseBackend";
-import { getSupabase, supabaseConfigured } from "@/lib/supabase/client";
+import { getToken, rpc, setToken, supabaseConfigured } from "@/lib/supabase/client";
+import LockScreen from "./LockScreen";
 
 interface Ctx {
   me: Person;
-  setMe: (p: Person) => void; // demo mode only
+  setMe: (p: Person) => void;
   data: Data;
   backend: Backend;
   error: string | null;
@@ -25,8 +25,8 @@ export const useStore = () => {
 
 const emptyData: Data = { events: [], notes: [], missYou: [] };
 
-function Live({ backend, me, setMe, signOut, children }: {
-  backend: Backend; me: Person; setMe: (p: Person) => void; signOut?: () => void; children: React.ReactNode;
+function Live({ backend, me, setMe, signOut, onAuthError, children }: {
+  backend: Backend; me: Person; setMe: (p: Person) => void; signOut?: () => void; onAuthError?: () => void; children: React.ReactNode;
 }) {
   const [data, setData] = useState<Data>(emptyData);
   const [error, setError] = useState<string | null>(null);
@@ -37,11 +37,12 @@ function Live({ backend, me, setMe, signOut, children }: {
       setData(await backend.load());
       setError(null);
     } catch (e) {
+      if ((e as Error).message === "locked") onAuthError?.();
       setError((e as Error).message);
     } finally {
       setReady(true);
     }
-  }, [backend]);
+  }, [backend, onAuthError]);
 
   useEffect(() => {
     refresh();
@@ -76,68 +77,39 @@ function LocalProvider({ children }: { children: React.ReactNode }) {
   return <Live backend={localBackend} me={me} setMe={setMe}>{children}</Live>;
 }
 
-type Session = { backend: Backend; me: Person } | "loading" | "needs-profile";
+type Session = { token: string; me: Person } | "loading" | "locked";
 
 function SupabaseProvider({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
   const [state, setState] = useState<Session>("loading");
 
-  const resolve = useCallback(async () => {
-    const sb = getSupabase();
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session) { router.replace("/login"); return; }
-    const { data: prof } = await sb.from("profiles").select("couple_id, person").eq("id", session.user.id).maybeSingle();
-    if (!prof) { setState("needs-profile"); return; }
-    setState({ backend: makeSupabaseBackend(prof.couple_id, session.user), me: prof.person });
-  }, [router]);
+  useEffect(() => {
+    const token = getToken();
+    if (!token) { setState("locked"); return; }
+    rpc<Person | null>("whoami", { p_token: token })
+      .then((p) => setState(p ? { token, me: p } : "locked"))
+      .catch(() => { setToken(null); setState("locked"); });
+  }, []);
 
-  useEffect(() => { resolve(); }, [resolve]);
+  const backend = useMemo(() => (typeof state === "object" ? makeSupabaseBackend(state.token) : null), [state]);
 
-  const signOut = useCallback(async () => {
-    await getSupabase().auth.signOut();
-    router.replace("/login");
-  }, [router]);
+  const lock = useCallback(async () => {
+    const t = getToken();
+    setToken(null);
+    setState("locked");
+    if (t) rpc("lock_session", { p_token: t }).catch(() => {});
+  }, []);
+
+  const setMe = useCallback(async (p: Person) => {
+    if (typeof state !== "object") return;
+    await rpc("set_person", { p_token: state.token, p_person: p });
+    setState({ token: state.token, me: p });
+  }, [state]);
 
   if (state === "loading") return <Splash text="Warming up the sunset…" />;
-  if (state === "needs-profile") return <ProfileSetup onDone={resolve} signOut={signOut} />;
-  return <Live backend={state.backend} me={state.me} setMe={() => {}} signOut={signOut}>{children}</Live>;
-}
-
-function ProfileSetup({ onDone, signOut }: { onDone: () => void; signOut: () => void }) {
-  const [person, setPerson] = useState<Person>("arya");
-  const [code, setCode] = useState("");
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    const { error } = await getSupabase().rpc("join_couple", { p_code: code, p_person: person });
-    setBusy(false);
-    if (error) setErr(error.message);
-    else onDone();
+  if (state === "locked" || !backend) {
+    return <LockScreen onUnlocked={(token, p) => { setToken(token); if (p) setState({ token, me: p }); }} />;
   }
-
-  return (
-    <div className="sky grid min-h-screen place-items-center p-4">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-3xl bg-card p-6 shadow-xl">
-        <h1 className="font-display text-2xl">Who are you?</h1>
-        <div className="grid grid-cols-2 gap-2">
-          {(["arya", "teju"] as const).map((p) => (
-            <button type="button" key={p} onClick={() => setPerson(p)}
-              className={`btn ${person === p ? "btn-sun" : "btn-ghost"}`}>{p === "arya" ? "Arya" : "Teju"}</button>
-          ))}
-        </div>
-        <div>
-          <label className="mb-1 block text-sm text-muted">Our secret code (pick one together, 6+ characters)</label>
-          <input className="field" value={code} onChange={(e) => setCode(e.target.value)} required minLength={6} />
-        </div>
-        {err && <p className="text-sm text-red-600">{err}</p>}
-        <button className="btn btn-sun w-full" disabled={busy}>{busy ? "Joining…" : "Join ourPage"}</button>
-        <button type="button" onClick={signOut} className="w-full text-sm text-muted underline">Sign out</button>
-      </form>
-    </div>
-  );
+  return <Live backend={backend} me={state.me} setMe={setMe} signOut={lock} onAuthError={lock}>{children}</Live>;
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {

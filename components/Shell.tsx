@@ -87,7 +87,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         </ul>
         <div className="hidden flex-1 md:block" />
         <div className="hidden flex-col gap-2 p-2 md:flex lg:p-3">
-          {backend.mode === "local" && (
+          {(
             <div className="flex gap-1 rounded-full border border-line p-1" role="group" aria-label="I am">
               {PEOPLE.map((p) => (
                 <button key={p} onClick={() => setMe(p)} title={`I'm ${NAMES[p]}`}
@@ -100,7 +100,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           <button onClick={toggleTheme} className="btn btn-ghost flex items-center justify-center gap-2" aria-label="Toggle theme">
             <Icon d={dark ? icons.sun : icons.moon} /><span className="hidden lg:inline">{dark ? "Day" : "Night"}</span>
           </button>
-          {signOut && <button onClick={signOut} className="text-xs text-muted underline">Out</button>}
+          {signOut && <button onClick={signOut} className="btn btn-ghost flex items-center justify-center gap-2" aria-label="Lock"><span aria-hidden>🔒</span><span className="hidden lg:inline">Lock</span></button>}
         </div>
       </nav>
 
@@ -111,7 +111,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           </div>
         )}
         <div className="mx-auto max-w-6xl p-3 sm:p-5 lg:p-8">{children}</div>
-        <div className="fixed right-3 top-3 z-20 md:hidden">
+        <div className="fixed right-3 top-3 z-20 flex gap-2 md:hidden">
+          {signOut && <button onClick={signOut} className="grid h-10 w-10 place-items-center rounded-full bg-card/90 shadow" aria-label="Lock">🔒</button>}
           <button onClick={toggleTheme} className="grid h-10 w-10 place-items-center rounded-full bg-card/90 text-sun shadow" aria-label="Toggle theme">
             <Icon d={dark ? icons.sun : icons.moon} />
           </button>
